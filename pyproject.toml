@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "conlang-dictionary"
+version = "0.1.0"
+description = "A dependency-free CLI dictionary builder for artificial languages"
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = ["conlang", "dictionary", "language", "cli"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Other/Nonlisted Topic",
+]
+
+[project.scripts]
+conlang-dict = "conlang_dict.cli:main"
+
+[tool.setuptools]
+packages = ["conlang_dict"]
