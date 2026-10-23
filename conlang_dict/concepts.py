@@ -1,9 +1,19 @@
-"""Built-in English–Chinese meanings offered during word creation."""
+"""English–Chinese meaning catalog used during word creation.
+
+The catalog bundles the NGSL 1.2 headword list with English definitions and
+concise Chinese glosses.  A small hand-curated set of common concepts keeps
+the topical categories (people, nature, actions, etc.) useful for quick
+browsing; every other NGSL headword lives in the General vocabulary category.
+"""
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from itertools import chain
+from pathlib import Path
+
+CORE_CATEGORY = "General vocabulary"
+_DATA_FILE = Path(__file__).with_name("data") / "concepts.json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,114 +23,136 @@ class Concept:
     english: str
     chinese: str
     category: str
+    definition: str = ""
 
     @property
     def label(self) -> str:
         return f"{self.english} — {self.chinese}"
 
+    @property
+    def key(self) -> str:
+        return self.english.casefold()
 
-_CONCEPT_DATA: dict[str, tuple[tuple[str, str], ...]] = {
-    "People & pronouns": (
-        ("I", "我"),
-        ("you", "你"),
-        ("he", "他"),
-        ("she", "她"),
-        ("we", "我们"),
-        ("they", "他们"),
-        ("person", "人"),
-        ("friend", "朋友"),
-        ("child", "孩子"),
-    ),
-    "Nature": (
-        ("water", "水"),
-        ("fire", "火"),
-        ("sun", "太阳"),
-        ("moon", "月亮"),
-        ("star", "星星"),
-        ("sky", "天空"),
-        ("earth", "土地"),
-        ("wind", "风"),
-        ("tree", "树"),
-        ("flower", "花"),
-        ("bird", "鸟"),
-        ("fish", "鱼"),
-        ("stone", "石头"),
-        ("mountain", "山"),
-    ),
-    "Body & animals": (
-        ("head", "头"),
-        ("eye", "眼睛"),
-        ("hand", "手"),
-        ("heart", "心"),
-        ("dog", "狗"),
-        ("cat", "猫"),
-        ("horse", "马"),
-    ),
-    "Actions": (
-        ("be", "是"),
-        ("have", "有"),
-        ("go", "去"),
-        ("come", "来"),
-        ("eat", "吃"),
-        ("drink", "喝"),
-        ("see", "看"),
-        ("hear", "听"),
-        ("speak", "说"),
-        ("know", "知道"),
-        ("love", "爱"),
-        ("sleep", "睡觉"),
-    ),
-    "Qualities & time": (
-        ("big", "大"),
-        ("small", "小"),
-        ("good", "好"),
-        ("bad", "坏"),
-        ("new", "新"),
-        ("old", "旧"),
-        ("hot", "热"),
-        ("cold", "冷"),
-        ("day", "白天"),
-        ("night", "夜晚"),
-    ),
-    "Numbers & quantity": (
-        ("one", "一"),
-        ("two", "二"),
-        ("three", "三"),
-        ("many", "许多"),
-        ("all", "全部"),
-    ),
-}
 
-CATEGORIES: tuple[str, ...] = tuple(_CONCEPT_DATA)
-_CONCEPTS_BY_CATEGORY: dict[str, tuple[Concept, ...]] = {
-    category: tuple(Concept(english, chinese, category) for english, chinese in pairs)
-    for category, pairs in _CONCEPT_DATA.items()
-}
-ALL_CONCEPTS: tuple[Concept, ...] = tuple(
-    chain.from_iterable(_CONCEPTS_BY_CATEGORY.values())
+def _load_concepts() -> tuple[Concept, ...]:
+    try:
+        payload = json.loads(_DATA_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Could not load the bundled meaning catalog at {_DATA_FILE}: {exc}"
+        ) from exc
+
+    records = payload.get("concepts")
+    if not isinstance(records, list):
+        raise RuntimeError("The bundled meaning catalog is malformed.")
+
+    concepts: list[Concept] = []
+    seen: set[str] = set()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        english = str(record.get("english", "")).strip()
+        chinese = str(record.get("chinese", "")).strip()
+        category = str(record.get("category", "")).strip()
+        definition = str(record.get("definition", "")).strip()
+        if not english or not chinese or not category:
+            continue
+        key = english.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        concepts.append(
+            Concept(
+                english=english,
+                chinese=chinese,
+                category=category,
+                definition=definition,
+            )
+        )
+    return tuple(concepts)
+
+
+ALL_CONCEPTS: tuple[Concept, ...] = _load_concepts()
+CATEGORIES: tuple[str, ...] = tuple(
+    dict.fromkeys(concept.category for concept in ALL_CONCEPTS)
 )
+CURATED_CATEGORIES: tuple[str, ...] = tuple(
+    category for category in CATEGORIES if category != CORE_CATEGORY
+)
+CONCEPTS_BY_CATEGORY: dict[str, tuple[Concept, ...]] = {
+    category: tuple(
+        concept for concept in ALL_CONCEPTS if concept.category == category
+    )
+    for category in CATEGORIES
+}
+CORE_CONCEPTS: tuple[Concept, ...] = CONCEPTS_BY_CATEGORY.get(CORE_CATEGORY, ())
+
+
+def _letter_for(concept: Concept) -> str:
+    first = concept.english[:1].upper()
+    return first if "A" <= first <= "Z" else "#"
+
+
+CORE_BY_LETTER: dict[str, tuple[Concept, ...]] = {
+    letter: tuple(
+        concept
+        for concept in CORE_CONCEPTS
+        if _letter_for(concept) == letter
+    )
+    for letter in sorted({_letter_for(concept) for concept in CORE_CONCEPTS})
+}
 
 
 def concepts_in(category: str) -> tuple[Concept, ...]:
-    """Return the concepts in one built-in category."""
+    """Return the concepts in one category."""
 
-    return _CONCEPTS_BY_CATEGORY.get(category, ())
+    return CONCEPTS_BY_CATEGORY.get(category, ())
 
 
 def category_size(category: str) -> int:
-    return len(_CONCEPTS_BY_CATEGORY.get(category, ()))
+    return len(CONCEPTS_BY_CATEGORY.get(category, ()))
+
+
+def core_letters() -> tuple[str, ...]:
+    return tuple(CORE_BY_LETTER)
+
+
+def core_concepts_for_letter(letter: str) -> tuple[Concept, ...]:
+    return CORE_BY_LETTER.get(letter.upper(), ())
 
 
 def search_concepts(query: str) -> tuple[Concept, ...]:
-    """Search the built-in catalog by English, Chinese, or category name."""
+    """Search the catalog by English, Chinese, or category name.
+
+    Results are ranked so exact English matches come first, then English
+    prefix/substring matches, exact and partial Chinese matches, and finally
+    category matches.
+    """
 
     needle = query.strip().casefold()
     if not needle:
         return ()
-    return tuple(
-        concept
-        for concept in ALL_CONCEPTS
-        if needle in concept.english.casefold()
-        or needle in concept.chinese
-        or needle in concept.category.casefold()
-    )
+
+    ranked: list[tuple[int, int, str, Concept]] = []
+    for concept in ALL_CONCEPTS:
+        english = concept.english.casefold()
+        if english == needle:
+            rank = 0
+        elif english.startswith(needle):
+            rank = 1
+        elif needle in english:
+            rank = 2
+        elif concept.chinese == needle:
+            rank = 3
+        elif concept.chinese.startswith(needle):
+            rank = 4
+        elif needle in concept.chinese:
+            rank = 5
+        elif needle in concept.category.casefold():
+            rank = 6
+        else:
+            continue
+        ranked.append((rank, len(concept.english), english, concept))
+
+    ranked.sort(key=lambda item: item[:3])
+    return tuple(item[3] for item in ranked)

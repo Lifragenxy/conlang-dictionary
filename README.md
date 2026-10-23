@@ -10,23 +10,26 @@ database or a GUI.
 
 ## Highlights
 
-- Guided word creation that shows English–Chinese meanings and asks for the
-  invented spelling.
+- Guided word creation using a catalog of **2,811 English–Chinese meanings**:
+  six curated topical groups plus 2,809 NGSL headwords.
+- Already-mapped meanings are hidden from the picker by default; a toggle shows
+  them when you deliberately want to create a synonym.
 - Basic CRUD: create, list/show/search, update, and delete.
+- Statistics view: character frequency, average/longest word, activity streaks,
+  and a daily contribution chart.
 - Persistent, human-readable JSON storage with atomic writes.
 - ASCII-only word validation.
 - Case-insensitive duplicate rejection (`vela`, `Vela`, and `VELA` are the same
   word).
 - Similar-spelling hints, both before creation (with an optional confirmation)
   and after every successful creation.
-- Optional synonyms: different constructed words may map to the same meaning.
 - Interactive menu when run without a command, plus scriptable subcommands.
-- English and Chinese text, with terminal-width-aware tables.
+- English and Chinese text, with terminal-width-aware tables and pagination.
 
 ## Requirements
 
 - Python 3.10 or newer.
-- No third-party packages.
+- No third-party packages at runtime.
 
 ## Quick start
 
@@ -74,24 +77,28 @@ $ python -m conlang_dict create
 
   Choose a meaning (English — 中文)
      1  People & pronouns (9)
-     2  Nature (14)
+     2  Nature (14, 1 mapped)
      3  Body & animals (7)
      4  Actions (12)
      5  Qualities & time (10)
      6  Numbers & quantity (5)
+     7  General vocabulary A–Z (2754)
      s  Search all meanings
      c  Custom English — 中文 pair
+     m  Show already-mapped meanings
      b  Cancel
+  Already-mapped meanings are hidden by default.
 
-? Choose [1-6/s/c/b]: s
-? Search English, 中文, or category: water
-  Found: water — 水  (Nature)
+? Choose [1-7/s/c/m/b]: s
+? Search English, 中文, or category: fire
+  Found: fire — 火  (Nature)
 
-  Selected meaning: water — 水
-? New word (ASCII letters, optional internal - or '): vela
+  Selected meaning: fire — 火
+  Definition: heat and the flame produced when burning
+? New word (ASCII letters, optional internal - or '): velar
 
-  ✓ Added "vela" (#1): water — 水
-  No existing words have a similar spelling.
+  ✓ Added "velar" (#2): fire — 火
+  Similar existing spellings: "vela" (#1).
 ```
 
 If an existing word is spelled similarly, the app shows the candidates and
@@ -107,11 +114,27 @@ asks whether to continue:
 After the entry is saved, its similar existing words are reported again as a
 final hint.
 
-### Natural-language meanings
+### Choosing a meaning
 
-- The built-in catalog contains 57 common concepts in six categories.
-- Search the catalog by English, Chinese, or category name.
-- Choose **Custom English — 中文 pair** to enter any other meaning.
+The catalog is larger than the terminal menu can comfortably display, so there
+are several ways to find a meaning:
+
+- **Curated categories** — people, nature, body/animals, actions, qualities,
+  and numbers.
+- **General vocabulary A–Z** — browse the NGSL headwords by first letter. Lists
+  are paginated with `n` (next) and `p` (previous).
+- **Search all meanings** — search by English, 中文, or category. Exact English
+  matches rank first, followed by prefix/substring and Chinese matches.
+- **Custom English — 中文 pair** — enter any meaning not in the catalog.
+
+A meaning that already has a constructed word is **hidden by default**, so the
+same concept is not offered again accidentally. Press `m` to show those
+meanings with a `✓ already mapped` marker. Selecting one asks for confirmation
+before creating a synonym. Guided creation therefore never creates a second
+entry for the same English meaning silently.
+
+`Definition:` lines come from the NGSL workbook and appear after a meaning is
+chosen.
 
 ### Spelling rules
 
@@ -128,7 +151,8 @@ A constructed word must:
 
 Two different words may share the same English–Chinese meaning; the app calls
 these synonyms. The duplicate rule applies to the constructed spelling, not to
-the meaning.
+the meaning. Synonyms are available through the mapped-meaning toggle or a
+custom meaning.
 
 ### Similar-spelling hints
 
@@ -152,6 +176,7 @@ conlang-dict [--file PATH] [--no-color] COMMAND ...
 | `update` / `edit TARGET` | Edit fields, prompting for each value. |
 | `delete` / `rm TARGET` | Delete after confirmation. |
 | `search` / `find QUERY` | Search words, meanings, and notes. |
+| `stats` / `statistics` | Show character frequency and daily contributions. |
 | *(no command)* | Open the interactive menu. |
 
 `TARGET` may be an entry ID, exact constructed word (case-insensitive), exact
@@ -166,6 +191,8 @@ Supplying `--word`, `--english`, and `--chinese` together skips the prompts:
 $ python -m conlang_dict create --word vela --english water --chinese 水 --notes "river word"
 ```
 
+This bypasses the mapped-meaning guard because the meaning is explicit.
+
 Other examples:
 
 ```console
@@ -174,11 +201,43 @@ $ python -m conlang_dict show vela
 $ python -m conlang_dict search 水
 $ python -m conlang_dict update vela --english sea --chinese 海
 $ python -m conlang_dict update vela --clear-notes
+$ python -m conlang_dict stats
 $ python -m conlang_dict delete vela --yes
 ```
 
 For guided updates, press Enter to keep the current value. Notes can be cleared
 by entering `-` at the notes prompt, or non-interactively with `--clear-notes`.
+
+## Statistics
+
+`stats` summarizes the entire dictionary:
+
+```console
+$ python -m conlang_dict stats
+```
+
+It shows:
+
+- entry count and distinct meanings;
+- total and unique characters, average word length, longest word;
+- first/latest entry date, active days, current and longest creation streaks;
+- the most productive day;
+- character frequency, ignoring capitalization, with counts and shares;
+- a per-day contribution table for recent UTC days, with bars and a total.
+
+Options:
+
+```console
+$ python -m conlang_dict stats --days 90 --top 30
+```
+
+- `--days N` controls the daily-contribution window (1–366; default 30).
+- `--top N` controls how many character-frequency rows are shown (1–100;
+  default 20).
+
+Contribution counts words **created** on each day, based on `created_at`.
+Updates are not counted as new contributions. The same report is available as
+menu option 7.
 
 ## Interactive menu
 
@@ -196,7 +255,8 @@ Running without a command opens:
    4  Update a word
    5  Delete a word
    6  Search
-   7  Quit
+   7  Statistics
+   8  Quit
 ```
 
 ## Data file
@@ -236,14 +296,20 @@ conlang-dictionary/
 │   ├── __init__.py
 │   ├── __main__.py       # python -m conlang_dict
 │   ├── cli.py            # commands, prompts, session flows
-│   ├── concepts.py       # built-in English–Chinese meanings
+│   ├── concepts.py       # catalog loader and search
 │   ├── dictionary.py     # model, validation, JSON persistence
 │   ├── display.py        # terminal styling and tables
-│   └── similarity.py     # edit distance and spelling hints
+│   ├── similarity.py     # edit distance and spelling hints
+│   ├── stats.py          # character and daily-activity metrics
+│   └── data/
+│       └── concepts.json # 2,811 English–Chinese meanings
 ├── tests/
 │   ├── test_cli.py
+│   ├── test_concepts.py
 │   ├── test_dictionary.py
-│   └── test_similarity.py
+│   ├── test_similarity.py
+│   └── test_stats.py
+├── THIRD_PARTY_NOTICES.md
 ├── pyproject.toml
 └── README.md
 ```
@@ -255,8 +321,8 @@ $ python -m unittest discover -s tests -v
 ```
 
 The suite covers validation, duplicate handling, CRUD persistence, file-format
-errors, edit distance, similarity ranking, guided creation, and the CLI
-commands.
+errors, edit distance, similarity ranking, the expanded catalog and map
+filtering, statistics, guided creation, and the CLI commands.
 
 ## Exit codes
 
@@ -267,10 +333,25 @@ commands.
 | `2` | Invalid command-line usage. |
 | `130` | Interrupted with Ctrl+C. |
 
+## Data sources
+
+- English headwords and definitions: **NGSL 1.2** (New General Service List),
+  from the workbook supplied for this project. See
+  <https://www.newgeneralservicelist.com/>.
+- Chinese glosses: derived from **ECDICT**, MIT licensed. See
+  <https://github.com/skywind3000/ECDICT>.
+
+The full attribution and ECDICT license text are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 ## Notes and limitations
 
 - The app is a single-user local tool; simultaneous writers are not coordinated.
 - Similarity hints are advisory. Only exact case-insensitive spelling matches
   are rejected.
+- The mapped-meaning guard compares the English headword, case-insensitively.
+  Two entries with different English glosses are considered different meanings.
+- Daily contributions use `created_at`; historical update activity is not
+  recorded.
 - `NO_COLOR=1` or `--no-color` disables ANSI styling. Colour is also disabled
   automatically when output is redirected.

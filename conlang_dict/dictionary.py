@@ -262,6 +262,19 @@ class Lexicon:
                 return entry
         return None
 
+    def entries_for_english(self, english: str) -> tuple[Entry, ...]:
+        """Return all entries mapped to an English meaning."""
+
+        key = english.casefold()
+        return tuple(
+            entry for entry in self.entries if entry.english.casefold() == key
+        )
+
+    def mapped_english_keys(self) -> frozenset[str]:
+        """Return the lowercase English meanings already represented."""
+
+        return frozenset(entry.english.casefold() for entry in self.entries)
+
     def similar_words(
         self,
         word: str,

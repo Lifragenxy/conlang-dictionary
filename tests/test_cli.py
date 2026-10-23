@@ -89,10 +89,10 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.quick_add().returncode, 0)
         result = self.run_cli(
             ["create"],
-            input_text="s\nwater\nVELA\n\n",
+            input_text="s\nfire\nVELA\n\n",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Selected meaning: water — 水", result.stdout)
+        self.assertIn("Selected meaning: fire — 火", result.stdout)
         self.assertIn("already in the dictionary", result.stdout)
         self.assertIn("Creation cancelled.", result.stdout)
         payload = json.loads(self.data.read_text(encoding="utf-8"))
@@ -102,15 +102,59 @@ class CliTests(unittest.TestCase):
         self.assertEqual(self.quick_add().returncode, 0)
         result = self.run_cli(
             ["create"],
-            input_text="s\nwater\nvelar\ny\n",
+            input_text="s\nfire\nvelar\ny\n",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Similar existing spellings", result.stdout)
         self.assertIn("vela (#1)", result.stdout)
-        self.assertIn('Added "velar" (#2)', result.stdout)
+        self.assertIn('Added "velar" (#2): fire — 火', result.stdout)
         self.assertIn(
             'Similar existing spellings: "vela" (#1).', result.stdout
         )
+
+    def test_mapped_meanings_are_hidden_from_picker(self) -> None:
+        self.assertEqual(self.quick_add().returncode, 0)
+        result = self.run_cli(
+            ["create"],
+            input_text="2\n0\nb\n",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Nature (14, 1 mapped)", result.stdout)
+        self.assertIn("13 available", result.stdout)
+        self.assertIn("1 mapped hidden", result.stdout)
+        self.assertNotIn("water — 水", result.stdout)
+
+    def test_mapped_search_is_blocked_until_shown(self) -> None:
+        self.assertEqual(self.quick_add().returncode, 0)
+        result = self.run_cli(
+            ["create"],
+            input_text="s\nwater\nb\n",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("already mapped", result.stdout)
+        self.assertIn("Press m", result.stdout)
+
+    def test_mapped_meaning_can_be_shown_for_synonym(self) -> None:
+        self.assertEqual(self.quick_add().returncode, 0)
+        result = self.run_cli(
+            ["create"],
+            input_text="m\ns\nwater\nn\n",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("now visible", result.stdout)
+        self.assertIn("Already mapped", result.stdout)
+        self.assertIn("Create another word", result.stdout)
+        self.assertIn("No word was created.", result.stdout)
+
+    def test_catalog_browse_by_letter(self) -> None:
+        result = self.run_cli(
+            ["create"],
+            input_text="7\nW\n0\n0\nb\n",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("General vocabulary", result.stdout)
+        self.assertIn("browse by letter", result.stdout)
+        self.assertIn("available", result.stdout)
 
     def test_ascii_validation(self) -> None:
         result = self.quick_add(word="café")
@@ -202,10 +246,29 @@ class CliTests(unittest.TestCase):
         self.assertEqual(shown.returncode, 0)
 
     def test_interactive_menu_quit(self) -> None:
-        result = self.run_cli([], input_text="7\n")
+        result = self.run_cli([], input_text="8\n")
         self.assertEqual(result.returncode, 0)
         self.assertIn("Conlang Lexicon", result.stdout)
+        self.assertIn("Statistics", result.stdout)
         self.assertIn("Goodbye.", result.stdout)
+
+    def test_stats_command(self) -> None:
+        self.assertEqual(self.quick_add().returncode, 0)
+        self.assertEqual(
+            self.quick_add("kando", "fire", "火").returncode, 0
+        )
+        result = self.run_cli(["stats", "--days", "7", "--top", "10"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Dictionary statistics", result.stdout)
+        self.assertIn("Character frequency", result.stdout)
+        self.assertIn("Contribution per day", result.stdout)
+        self.assertIn("2 words", result.stdout)
+        self.assertIn("created in this period", result.stdout)
+
+    def test_stats_rejects_out_of_range_options(self) -> None:
+        result = self.run_cli(["stats", "--days", "0"])
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--days must be between", result.stdout)
 
     def test_missing_entry_reports_similar_spelling(self) -> None:
         self.assertEqual(self.quick_add("vela", "water", "水").returncode, 0)

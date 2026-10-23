@@ -8,10 +8,13 @@ from pathlib import Path
 
 from . import __version__
 from .concepts import (
-    CATEGORIES,
+    CORE_CATEGORY,
+    CORE_CONCEPTS,
+    CURATED_CATEGORIES,
     Concept,
-    category_size,
     concepts_in,
+    core_concepts_for_letter,
+    core_letters,
     search_concepts,
 )
 from .dictionary import (
@@ -35,6 +38,11 @@ from .display import (
     format_timestamp,
     plural,
     truncate_display,
+)
+from .stats import (
+    character_frequencies,
+    contributions_by_day,
+    summarize,
 )
 
 APP_NAME = "Conlang Lexicon"
@@ -119,7 +127,7 @@ class App:
         while True:
             self._show_menu()
             try:
-                choice = ask(self.console, "Choose [1-7]").casefold()
+                choice = ask(self.console, "Choose [1-8]").casefold()
             except PromptCancelled:
                 self.console.blank()
                 self.console.hint("Cancelled.")
@@ -128,12 +136,12 @@ class App:
                 self.console.blank()
                 return 0
 
-            if choice in {"7", "q", "quit", "exit"}:
+            if choice in {"8", "q", "quit", "exit"}:
                 self.console.blank()
                 self.console.hint("Goodbye.")
                 return 0
-            if choice not in {"1", "2", "3", "4", "5", "6"}:
-                self.console.error("Please choose a number from 1 to 7.")
+            if choice not in {"1", "2", "3", "4", "5", "6", "7"}:
+                self.console.error("Please choose a number from 1 to 8.")
                 continue
 
             try:
@@ -159,6 +167,8 @@ class App:
                         self._display_search(query)
                     else:
                         self.console.hint("Cancelled.")
+                elif choice == "7":
+                    self.display_stats()
             except PromptCancelled:
                 self.console.blank()
                 self.console.hint("Cancelled.")
@@ -173,7 +183,7 @@ class App:
                 self.console.error(str(exc))
                 continue
 
-            if choice in {"2", "3", "6"}:
+            if choice in {"2", "3", "6", "7"}:
                 try:
                     pause(self.console)
                 except PromptCancelled:
@@ -205,7 +215,8 @@ class App:
         console.print("   4  Update a word")
         console.print("   5  Delete a word")
         console.print("   6  Search")
-        console.print("   7  Quit")
+        console.print("   7  Statistics")
+        console.print("   8  Quit")
         if count == 0:
             console.print()
             console.hint("The dictionary is empty. Start with option 1.")
@@ -275,19 +286,20 @@ class App:
             + " — "
             + concept.chinese
         )
+        if concept.definition:
+            self.console.hint(f"Definition: {concept.definition}")
 
-        existing = [
-            entry
-            for entry in self.lexicon.entries
-            if entry.english.casefold() == concept.english.casefold()
-            and entry.chinese.casefold() == concept.chinese.casefold()
-        ]
+        existing = self.lexicon.entries_for_english(concept.english)
         if existing:
             refs = ", ".join(f'"{entry.word}" (#{entry.id})' for entry in existing)
-            self.console.hint(
-                f"Already mapped to this meaning: {refs}. "
-                "This new entry will be a synonym."
-            )
+            self.console.warning(f"Already mapped: {refs}.")
+            if not ask_yes_no(
+                self.console,
+                "Create another word for this meaning (a synonym)?",
+                default=False,
+            ):
+                self.console.hint("No word was created.")
+                return None
 
         word = self.prompt_new_word(assume_yes=assume_yes)
         if word is None:
@@ -340,24 +352,58 @@ class App:
     # Concept picker
     # ------------------------------------------------------------------
     def choose_concept(self) -> Concept | None:
+        mapped_keys = self.lexicon.mapped_english_keys()
+        show_mapped = False
+
         while True:
             self.console.section("Choose a meaning (English — 中文)")
-            for index, category in enumerate(CATEGORIES, start=1):
+            for index, category in enumerate(CURATED_CATEGORIES, start=1):
+                concepts = concepts_in(category)
+                mapped = self._mapped_count(concepts, mapped_keys)
+                suffix = f", {mapped} mapped" if mapped else ""
                 self.console.print(
-                    f"    {index:>2}  {category} ({category_size(category)})"
+                    f"    {index:>2}  {category} ({len(concepts)}{suffix})"
                 )
+
+            core_index = len(CURATED_CATEGORIES) + 1
+            core_mapped = self._mapped_count(CORE_CONCEPTS, mapped_keys)
+            core_suffix = f", {core_mapped} mapped" if core_mapped else ""
+            self.console.print(
+                f"    {core_index:>2}  {CORE_CATEGORY} A–Z "
+                f"({len(CORE_CONCEPTS)}{core_suffix})"
+            )
             self.console.print("     s  Search all meanings")
             self.console.print("     c  Custom English — 中文 pair")
+            self.console.print(
+                "     m  "
+                + ("Hide" if show_mapped else "Show")
+                + " already-mapped meanings"
+            )
             self.console.print("     b  Cancel")
+            if not show_mapped and mapped_keys:
+                self.console.hint(
+                    "Already-mapped meanings are hidden by default."
+                )
 
             choice = ask(
                 self.console,
-                f"Choose [1-{len(CATEGORIES)}/s/c/b]",
+                f"Choose [1-{core_index}/s/c/m/b]",
             ).casefold()
             if choice in {"", "b", "back", "cancel"}:
                 return None
+            if choice in {"m", "mapped"}:
+                show_mapped = not show_mapped
+                if show_mapped:
+                    self.console.hint(
+                        "Already-mapped meanings are now visible and marked ✓."
+                    )
+                else:
+                    self.console.hint("Already-mapped meanings are hidden again.")
+                continue
             if choice in {"s", "search"}:
-                concept = self.search_concept_ui()
+                concept = self.search_concept_ui(
+                    mapped_keys, show_mapped=show_mapped
+                )
                 if concept is not None:
                     return concept
                 continue
@@ -365,17 +411,107 @@ class App:
                 return self.custom_concept()
             if choice.isdigit():
                 number = int(choice)
-                if 1 <= number <= len(CATEGORIES):
-                    concept = self.choose_in_category(CATEGORIES[number - 1])
+                if 1 <= number <= len(CURATED_CATEGORIES):
+                    category = CURATED_CATEGORIES[number - 1]
+                    concepts = concepts_in(category)
+                    mapped = self._mapped_count(concepts, mapped_keys)
+                    if not show_mapped and mapped == len(concepts):
+                        self.console.warning(
+                            f"Every meaning in {category} is already mapped."
+                        )
+                        self.console.hint(
+                            "Press m to show mapped meanings and choose one "
+                            "for a synonym."
+                        )
+                        continue
+                    concept = self.choose_in_category(
+                        category,
+                        mapped_keys=mapped_keys,
+                        show_mapped=show_mapped,
+                    )
                     if concept is not None:
                         return concept
                     continue
-            self.console.error("Please choose a listed number, s, c, or b.")
+                if number == core_index:
+                    if not show_mapped and core_mapped == len(CORE_CONCEPTS):
+                        self.console.warning(
+                            "Every General vocabulary meaning is already mapped."
+                        )
+                        self.console.hint(
+                            "Press m to show mapped meanings and choose one "
+                            "for a synonym."
+                        )
+                        continue
+                    concept = self.browse_core(
+                        mapped_keys, show_mapped=show_mapped
+                    )
+                    if concept is not None:
+                        return concept
+                    continue
+            self.console.error(
+                "Please choose a listed number, s, c, m, or b."
+            )
 
-    def choose_in_category(self, category: str) -> Concept | None:
-        return self._choose_from_list(concepts_in(category), category)
+    def choose_in_category(
+        self,
+        category: str,
+        *,
+        mapped_keys: frozenset[str],
+        show_mapped: bool,
+    ) -> Concept | None:
+        return self._choose_from_list(
+            concepts_in(category),
+            category,
+            mapped_keys=mapped_keys,
+            show_mapped=show_mapped,
+        )
 
-    def search_concept_ui(self) -> Concept | None:
+    def browse_core(
+        self,
+        mapped_keys: frozenset[str],
+        *,
+        show_mapped: bool,
+    ) -> Concept | None:
+        letters = core_letters()
+        while True:
+            self.console.section(f"{CORE_CATEGORY} · browse by letter")
+            for letter in letters:
+                concepts = core_concepts_for_letter(letter)
+                mapped = self._mapped_count(concepts, mapped_keys)
+                suffix = f", {mapped} mapped" if mapped else ""
+                self.console.print(
+                    f"    {letter}  {len(concepts):>4} words{suffix}"
+                )
+            self.console.print("     0  Back")
+
+            choice = ask(self.console, "Letter [A-Z/0]").upper()
+            if choice in {"", "0", "BACK"}:
+                return None
+            if choice in letters:
+                concepts = core_concepts_for_letter(choice)
+                mapped = self._mapped_count(concepts, mapped_keys)
+                if not show_mapped and mapped == len(concepts):
+                    self.console.warning(
+                        f"Every {choice} word in General vocabulary is already mapped."
+                    )
+                    self.console.hint(
+                        "Press m to show mapped meanings and choose one for a synonym."
+                    )
+                    continue
+                return self._choose_from_list(
+                    concepts,
+                    f"{CORE_CATEGORY} · {choice}",
+                    mapped_keys=mapped_keys,
+                    show_mapped=show_mapped,
+                )
+            self.console.error("Please choose a letter from A to Z, or 0.")
+
+    def search_concept_ui(
+        self,
+        mapped_keys: frozenset[str],
+        *,
+        show_mapped: bool,
+    ) -> Concept | None:
         query = ask(self.console, "Search English, 中文, or category")
         if not query:
             return None
@@ -383,17 +519,46 @@ class App:
         if not matches:
             self.console.warning(f'No built-in meanings matched "{query}".')
             return None
-        if len(matches) == 1:
-            concept = matches[0]
+
+        visible = self._visible_concepts(
+            matches, mapped_keys, show_mapped=show_mapped
+        )
+        hidden = len(matches) - len(visible)
+        if not visible:
+            if len(matches) == 1:
+                self.console.warning(
+                    f'The meaning matching "{query}" is already mapped.'
+                )
+            else:
+                self.console.warning(
+                    f'All {len(matches)} meanings matching "{query}" '
+                    "are already mapped."
+                )
+            self.console.hint(
+                "Press m to show mapped meanings and choose one for a synonym."
+            )
+            return None
+
+        if len(visible) == 1:
+            concept = visible[0]
             self.console.print(
                 "  "
                 + self.console.green("Found: ")
                 + f"{concept.english} — {concept.chinese}"
                 + self.console.dim(f"  ({concept.category})")
             )
+            if hidden:
+                self.console.hint(
+                    f"{hidden} already-mapped matching meaning"
+                    f"{'s are' if hidden != 1 else ' is'} hidden."
+                )
             return concept
+
         return self._choose_from_list(
-            matches, f'Search results for "{query}"', limit=24
+            matches,
+            f'Search results for "{query}"',
+            mapped_keys=mapped_keys,
+            show_mapped=show_mapped,
         )
 
     def _choose_from_list(
@@ -401,39 +566,107 @@ class App:
         concepts: tuple[Concept, ...],
         title: str,
         *,
-        limit: int = 24,
+        mapped_keys: frozenset[str],
+        show_mapped: bool,
     ) -> Concept | None:
-        shown = concepts[:limit]
-        self.console.section(title)
-        for index, concept in enumerate(shown, start=1):
-            category = (
-                "  " + self.console.dim(f"({concept.category})")
-                if title.startswith("Search")
-                else ""
-            )
-            self.console.print(
-                f"    {index:>2}  {concept.english} — {concept.chinese}{category}"
-            )
-        if len(concepts) > limit:
+        visible = self._visible_concepts(
+            concepts, mapped_keys, show_mapped=show_mapped
+        )
+        if not visible:
+            self.console.warning("Every meaning in this list is already mapped.")
             self.console.hint(
-                f"Showing {limit} of {len(concepts)} matches; "
-                "use a narrower search."
+                "Press m to show mapped meanings and choose one for a synonym."
             )
-        self.console.print("     0  Back")
+            return None
+
+        page_size = 20
+        total_pages = max(1, (len(visible) + page_size - 1) // page_size)
+        page = 0
+        hidden = len(concepts) - len(visible)
 
         while True:
+            start = page * page_size
+            page_items = visible[start : start + page_size]
+            self.console.section(title)
+            subtitle = (
+                f"{len(visible)} available · page {page + 1}/{total_pages}"
+            )
+            if hidden and not show_mapped:
+                subtitle += f" · {hidden} mapped hidden"
+            self.console.hint(subtitle)
+
+            for index, concept in enumerate(page_items, start=1):
+                category = (
+                    "  " + self.console.dim(f"({concept.category})")
+                    if title.startswith("Search")
+                    else ""
+                )
+                marker = (
+                    "  " + self.console.dim("✓ already mapped")
+                    if concept.key in mapped_keys
+                    else ""
+                )
+                self.console.print(
+                    f"    {index:>2}  {concept.english} — "
+                    f"{concept.chinese}{category}{marker}"
+                )
+
+            if total_pages > 1:
+                if page > 0:
+                    self.console.print("     p  Previous page")
+                if page < total_pages - 1:
+                    self.console.print("     n  Next page")
+            self.console.print("     0  Back")
+
+            page_hint = ""
+            if total_pages > 1:
+                page_hint = "/n/p"
             choice = ask(
                 self.console,
-                f"Choose meaning [0-{len(shown)}]",
+                f"Choose meaning [0-{len(page_items)}{page_hint}]",
             ).casefold()
             if choice in {"", "0", "b", "back"}:
                 return None
+            if choice in {"n", "next"}:
+                if page < total_pages - 1:
+                    page += 1
+                    continue
+                self.console.error("There is no next page.")
+                continue
+            if choice in {"p", "prev", "previous"}:
+                if page > 0:
+                    page -= 1
+                    continue
+                self.console.error("There is no previous page.")
+                continue
             if choice.isdigit():
                 number = int(choice)
-                if 1 <= number <= len(shown):
-                    return shown[number - 1]
-            self.console.error("Please enter a number from 0 to "
-                               f"{len(shown)}.")
+                if 1 <= number <= len(page_items):
+                    return page_items[number - 1]
+            self.console.error(
+                f"Please enter a number from 0 to {len(page_items)}"
+                + (", n, or p." if total_pages > 1 else ".")
+            )
+
+    @staticmethod
+    def _visible_concepts(
+        concepts: tuple[Concept, ...],
+        mapped_keys: frozenset[str],
+        *,
+        show_mapped: bool,
+    ) -> tuple[Concept, ...]:
+        if show_mapped:
+            return tuple(concepts)
+        return tuple(
+            concept for concept in concepts if concept.key not in mapped_keys
+        )
+
+    @staticmethod
+    def _mapped_count(
+        concepts: tuple[Concept, ...],
+        mapped_keys: frozenset[str],
+    ) -> int:
+        return sum(1 for concept in concepts if concept.key in mapped_keys)
 
     def custom_concept(self) -> Concept | None:
         self.console.section("Custom English — 中文 meaning")
@@ -508,8 +741,8 @@ class App:
         self._detail("Updated", format_timestamp(entry.updated_at))
         self.console.blank()
 
-    def _detail(self, label: str, value: str) -> None:
-        padding = " " * max(0, 10 - display_width(label))
+    def _detail(self, label: str, value: str, *, width: int = 10) -> None:
+        padding = " " * max(0, width - display_width(label))
         self.console.print(
             f"  {self.console.bold(label)}{padding}  {value}"
         )
@@ -559,6 +792,149 @@ class App:
             f'Search "{query}" · {len(matches)} {plural(len(matches), "match", "matches")}'
         )
         self._print_table(matches, sort="word")
+
+    # ------------------------------------------------------------------
+    # Statistics
+    # ------------------------------------------------------------------
+    def cmd_stats(self, args: argparse.Namespace) -> int:
+        if not 1 <= args.days <= 366:
+            raise CliUsageError("--days must be between 1 and 366.")
+        if not 1 <= args.top <= 100:
+            raise CliUsageError("--top must be between 1 and 100.")
+        self.display_stats(days=args.days, top=args.top)
+        return 0
+
+    def display_stats(self, *, days: int = 30, top: int = 20) -> None:
+        entries = self.lexicon.entries
+        if not entries:
+            self.console.heading("Dictionary statistics")
+            self.console.print("  The dictionary is empty.")
+            self.console.hint("Add some words to see character and activity statistics.")
+            return
+
+        stats = summarize(entries)
+        self.console.heading("Dictionary statistics")
+        self.console.print(
+            "  " + self.console.dim(display_path(self.lexicon.path))
+        )
+        self.console.blank()
+
+        width = 18
+        self._detail("Words", str(stats.entries), width=width)
+        self._detail(
+            "Distinct meanings", str(stats.distinct_meanings), width=width
+        )
+        self._detail(
+            "Characters",
+            f"{stats.total_characters} total · "
+            f"{stats.unique_characters} unique",
+            width=width,
+        )
+        self._detail(
+            "Average length",
+            f"{stats.average_word_length:.2f}",
+            width=width,
+        )
+        self._detail(
+            "Longest word",
+            f'"{stats.longest_word}" ({stats.longest_word_length})',
+            width=width,
+        )
+        self._detail("Active days", str(stats.active_days), width=width)
+        self._detail(
+            "Current streak",
+            f"{stats.current_streak} "
+            f"{plural(stats.current_streak, 'day')}",
+            width=width,
+        )
+        self._detail(
+            "Longest streak",
+            f"{stats.longest_streak} "
+            f"{plural(stats.longest_streak, 'day')}",
+            width=width,
+        )
+        self._detail(
+            "First entry",
+            stats.first_created.isoformat() if stats.first_created else "—",
+            width=width,
+        )
+        self._detail(
+            "Latest entry",
+            stats.latest_created.isoformat() if stats.latest_created else "—",
+            width=width,
+        )
+        if stats.most_productive_day is not None:
+            self._detail(
+                "Best day",
+                f"{stats.most_productive_day.isoformat()} "
+                f"({stats.most_productive_count} "
+                f"{plural(stats.most_productive_count, 'word')})",
+                width=width,
+            )
+
+        self.console.section("Character frequency (case-insensitive)")
+        self.console.hint(
+            f"{stats.unique_characters} unique characters across "
+            f"{stats.total_characters} characters."
+        )
+        frequencies = character_frequencies(entries)
+        ranked = sorted(
+            frequencies.items(), key=lambda item: (-item[1], item[0])
+        )
+        shown = ranked[:top]
+        rows = [
+            (
+                str(index),
+                character,
+                str(count),
+                f"{count / stats.total_characters * 100:.1f}%",
+            )
+            for index, (character, count) in enumerate(shown, start=1)
+        ]
+        self.console.print_table(
+            ("#", "CHAR", "COUNT", "SHARE"),
+            rows,
+            caps=(4, 6, 8, 8),
+            right_columns=(0, 2, 3),
+        )
+        if len(ranked) > len(shown):
+            self.console.hint(
+                f"Showing the top {len(shown)} of {len(ranked)} characters; "
+                "use --top to show more."
+            )
+
+        daily = contributions_by_day(entries, days)
+        max_count = max((item.count for item in daily), default=0)
+        active_in_period = sum(1 for item in daily if item.count)
+        total_in_period = sum(item.count for item in daily)
+        bar_width = 24
+        daily_rows = []
+        for item in daily:
+            if item.count:
+                bar_length = max(
+                    1, round(item.count / max_count * bar_width)
+                )
+                bar = "█" * bar_length
+            else:
+                bar = ""
+            daily_rows.append(
+                (item.day.isoformat(), str(item.count), bar)
+            )
+
+        self.console.section(
+            f"Contribution per day · last {days} days (UTC)"
+        )
+        self.console.print_table(
+            ("DATE", "WORDS", ""),
+            daily_rows,
+            caps=(12, 6, bar_width),
+            right_columns=(1,),
+        )
+        self.console.hint(
+            f"{total_in_period} {plural(total_in_period, 'word')} created "
+            f"in this period on {active_in_period} "
+            f"{plural(active_in_period, 'active day')}."
+        )
 
     # ------------------------------------------------------------------
     # Update
@@ -814,6 +1190,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  conlang-dict show 1\n"
             "  conlang-dict create --word vela --english water --chinese 水\n"
             "  conlang-dict update vela --english sea --chinese 海\n"
+            "  conlang-dict stats\n"
             "  conlang-dict delete vela --yes"
         ),
     )
@@ -955,6 +1332,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Text to find in a word, English/中文 meaning, or notes.",
     )
     search_parser.set_defaults(func=App.cmd_search)
+
+    stats_parser = subparsers.add_parser(
+        "stats",
+        aliases=["statistics"],
+        help="Show character and daily-contribution statistics.",
+    )
+    stats_parser.add_argument(
+        "--days",
+        type=int,
+        default=30,
+        metavar="N",
+        help="Number of recent UTC days to chart (1-366; default: 30).",
+    )
+    stats_parser.add_argument(
+        "--top",
+        type=int,
+        default=20,
+        metavar="N",
+        help="Number of character-frequency rows to show (1-100; default: 20).",
+    )
+    stats_parser.set_defaults(func=App.cmd_stats)
 
     return parser
 

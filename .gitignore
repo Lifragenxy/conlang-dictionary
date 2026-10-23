@@ -9,5 +9,6 @@ dist/
 .coverage
 htmlcov/
 
-data/
+/data/
+/tmp*/
 smoke-*.json

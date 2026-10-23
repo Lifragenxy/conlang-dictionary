@@ -181,6 +181,19 @@ class LexiconTests(unittest.TestCase):
         self.assertEqual(len(self.lexicon.search("warm")), 1)
         self.assertEqual(len(self.lexicon.search("absent")), 0)
 
+    def test_english_meaning_lookups_and_mapped_keys(self) -> None:
+        vela = self.add_vela()
+        aqua = self.lexicon.add("aqua", "water", "水")
+        self.assertEqual(
+            {entry.id for entry in self.lexicon.entries_for_english("WATER")},
+            {vela.id, aqua.id},
+        )
+        self.assertEqual(self.lexicon.entries_for_english("fire"), ())
+        self.assertEqual(
+            self.lexicon.mapped_english_keys(),
+            frozenset({"water"}),
+        )
+
     def test_similar_words_are_sorted_limited_and_excludable(self) -> None:
         kata = self.lexicon.add("kata", "cat", "猫")
         kato = self.lexicon.add("kato", "dog", "狗")
